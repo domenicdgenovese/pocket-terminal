@@ -87,7 +87,9 @@ right back in it.
 - macOS host (uses `launchd`, and iPhone Mirroring if you want Claude to drive
   the phone for you). Intel and Apple Silicon both handled.
 - [Homebrew](https://brew.sh)
-- [Tailscale](https://tailscale.com) — the **system app**, free tier is fine
+- [Tailscale](https://tailscale.com) — the **system app**, free tier is fine.
+  Note the cask runs a pkg installer, so this one step *does* prompt for your
+  admin password. `setup-mac.sh` itself never does.
 - A mosh-capable terminal: [Blink Shell](https://blink.sh) (free to install),
   or Moshi. Termius works for SSH but has no mosh, so you lose the anti-lag.
 

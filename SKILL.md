@@ -54,9 +54,16 @@ burning the user's time discovering them mid-flow:
 Tell the user about these up front, once, in a sentence. Do not re-litigate them
 each time one appears.
 
-## Phase A — Mac side (no admin password required)
+## Phase A — Mac side
 
-Run `scripts/setup-mac.sh`. It is idempotent; safe to re-run.
+Run `scripts/setup-mac.sh`. It is idempotent; safe to re-run, and it needs **no
+admin password** — that is the point of the design below.
+
+The one step in this phase that *does* prompt for a password is installing the
+Tailscale cask, because it runs a pkg installer. That prompt is the user's to
+answer, and it's a normal one-time app install rather than a system change you
+talked them into. Say so plainly instead of letting an unexpected `Password:`
+appear mid-flow.
 
 The key design decision: **run a user-level sshd on port 2222** instead of
 enabling system Remote Login on 22. Remote Login needs `sudo`. A per-user sshd
