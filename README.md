@@ -66,7 +66,16 @@ Claude Code picks it up automatically. Then just describe what you want —
 ~/.claude/skills/pocket-terminal/scripts/verify-pocket.sh # check every layer
 ```
 
-`setup-mac.sh` is idempotent. `verify-pocket.sh` tests each layer independently,
+Set `POCKET_PROJECT` if you want to land somewhere other than `$HOME`:
+
+```bash
+POCKET_PROJECT=~/code/my-project ~/.claude/skills/pocket-terminal/scripts/setup-mac.sh
+```
+
+It's idempotent, but it *rewrites* `~/.local/bin/pocket` each run — so pass the
+variable every time or a re-run will quietly reset your landing directory.
+
+`verify-pocket.sh` tests each layer independently,
 which is the whole point — it turns one opaque failure on a small screen into a
 specific answer: network, auth, mosh, or session.
 

@@ -1,0 +1,121 @@
+#!/bin/zsh
+# pocket-doctor — diagnose the pocket-terminal stack from the phone.
+#
+# The whole point: when something breaks you are holding a 6-inch screen,
+# possibly not at home. One opaque error is useless there. This prints the
+# state of each layer separately so the answer is "Tailscale is down" or
+# "the Mac is on battery", not "connection failed".
+#
+#   doctor          full check
+#   doctor --brief  one-line summary (used as the session banner)
+
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+TS_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+G=$'\e[32m'; R=$'\e[31m'; Y=$'\e[33m'; D=$'\e[2m'; B=$'\e[1m'; N=$'\e[0m'
+
+power_state() {
+  local raw pct src
+  raw="$(pmset -g batt 2>/dev/null)"
+  pct="$(print -r -- "$raw" | grep -o '[0-9]*%' | head -1)"
+  if print -r -- "$raw" | grep -q "AC Power"; then src="AC"; else src="battery"; fi
+  print -r -- "$src $pct"
+}
+
+brief() {
+  local p; p="$(power_state)"
+  local warn=""
+  [[ "$p" == battery* ]] && warn="${R} ← plug in${N}"
+  print -r -- ""
+  print -r -- "  ${B}You are on the MacBook${N} ${D}(not the phone)${N}"
+  print -r -- "  ${D}project:${N} $(basename "$PWD")   ${D}power:${N} ${p}${warn}"
+  print -r -- ""
+  print -r -- "  ${B}claude${N}   start Claude Code      ${B}doctor${N}   check what's broken"
+  print -r -- "  ${D}ctrl-b then d = detach. Everything keeps running.${N}"
+  print -r -- ""
+}
+
+full() {
+  print -r -- ""
+  print -r -- "${B}pocket-doctor${N}"
+  print -r -- ""
+
+  # --- power ------------------------------------------------------------
+  local p; p="$(power_state)"
+  if [[ "$p" == AC* ]]; then
+    print -r -- "  ${G}ok${N}   power        $p"
+  else
+    print -r -- "  ${R}WARN${N} power        $p — on battery, the Mac will sleep and cut you off"
+  fi
+
+  # Match the field name exactly — "displaysleep" and "disksleep" also contain
+  # "sleep" and will happily give you the wrong number.
+  local slp; slp="$(pmset -g custom 2>/dev/null | sed -n '/AC Power/,/Battery/p' | awk '$1=="sleep"{print $2; exit}')"
+  if [[ "$slp" == "0" ]]; then
+    print -r -- "  ${G}ok${N}   sleep(AC)    disabled"
+  else
+    print -r -- "  ${Y}warn${N} sleep(AC)    ${slp:-unknown} min — Mac may sleep on power"
+  fi
+
+  if pgrep -f "caffeinate -s" >/dev/null 2>&1; then
+    print -r -- "  ${G}ok${N}   keep-awake   caffeinate running"
+  else
+    print -r -- "  ${Y}warn${N} keep-awake   caffeinate not running"
+  fi
+
+  # --- tailscale --------------------------------------------------------
+  if [[ -x "$TS_BIN" ]]; then
+    local st; st="$("$TS_BIN" status 2>&1 | head -1)"
+    if print -r -- "$st" | grep -q "^100\."; then
+      print -r -- "  ${G}ok${N}   tailscale    $(print -r -- "$st" | awk '{print $1, $2}')"
+      local peers; peers="$("$TS_BIN" status 2>/dev/null | grep -c "offline" )"
+      print -r -- "  ${D}     peers        $("$TS_BIN" status 2>/dev/null | wc -l | tr -d ' ') total, ${peers} offline${N}"
+    else
+      print -r -- "  ${R}FAIL${N} tailscale    $st"
+      print -r -- "  ${D}     fix: open Tailscale from the menu bar and sign in${N}"
+    fi
+  else
+    print -r -- "  ${R}FAIL${N} tailscale    app not installed"
+  fi
+
+  # --- sshd -------------------------------------------------------------
+  if lsof -nP -iTCP:2222 -sTCP:LISTEN >/dev/null 2>&1; then
+    print -r -- "  ${G}ok${N}   sshd         listening on 2222"
+  else
+    print -r -- "  ${R}FAIL${N} sshd         not listening on 2222"
+    print -r -- "  ${D}     fix: launchctl load ~/Library/LaunchAgents/com.pocket.sshd.plist${N}"
+  fi
+
+  local nkeys; nkeys="$(grep -c '^ssh-\|^ecdsa-' "$HOME/.ssh/authorized_keys" 2>/dev/null || echo 0)"
+  if [[ "$nkeys" -gt 0 ]]; then
+    print -r -- "  ${G}ok${N}   keys         $nkeys authorized"
+  else
+    print -r -- "  ${R}FAIL${N} keys         none in ~/.ssh/authorized_keys"
+  fi
+
+  # --- mosh + session ---------------------------------------------------
+  if command -v mosh-server >/dev/null 2>&1; then
+    print -r -- "  ${G}ok${N}   mosh         $(mosh-server --version 2>&1 | head -1 | grep -o '[0-9][0-9.]*' | head -1)"
+  else
+    print -r -- "  ${R}FAIL${N} mosh         mosh-server not found"
+  fi
+
+  if [[ "$(locale charmap 2>/dev/null)" == "UTF-8" ]]; then
+    print -r -- "  ${G}ok${N}   locale       UTF-8"
+  else
+    print -r -- "  ${R}FAIL${N} locale       $(locale charmap 2>/dev/null) — mosh-server will refuse to start"
+  fi
+
+  if tmux has-session -t pocket 2>/dev/null; then
+    print -r -- "  ${G}ok${N}   session      $(tmux list-sessions 2>/dev/null | grep '^pocket:')"
+  else
+    print -r -- "  ${Y}warn${N} session      no 'pocket' session yet"
+  fi
+
+  print -r -- ""
+}
+
+case "$1" in
+  --brief|-b) brief ;;
+  *) full ;;
+esac

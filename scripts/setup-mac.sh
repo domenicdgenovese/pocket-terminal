@@ -10,6 +10,9 @@
 set -euo pipefail
 
 PORT="${1:-2222}"
+# Resolve where this script lives so bundled helpers (pocket-doctor) are found
+# regardless of the caller's working directory.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POCKET="$HOME/.pocket"
 SSHD_DIR="$POCKET/sshd"
 AGENT="$HOME/Library/LaunchAgents/com.pocket.sshd.plist"
@@ -130,11 +133,42 @@ export LC_CTYPE="\${LC_CTYPE:-en_US.UTF-8}"
 export TERM="\${TERM:-xterm-256color}"
 
 PROJECT="\${1:-$PROJECT_DEFAULT}"
-[ -d "\$PROJECT" ] && cd "\$PROJECT"
+[ -d "\$PROJECT" ] || PROJECT="\$HOME"
 
-exec tmux new-session -A -s pocket
+# Already running? Attach quietly rather than reprinting over existing work.
+if tmux has-session -t pocket 2>/dev/null; then
+  exec tmux attach -t pocket
+fi
+
+tmux new-session -d -s pocket -c "\$PROJECT"
+
+# The status bar earns its space. The most common confusion in this setup is
+# losing track of which machine the prompt belongs to — running \`mosh mac\`
+# while already connected yields a cryptic DNS error. A permanent on-screen
+# "MAC" marker removes that whole class of mistake.
+tmux set-option -t pocket status-style "bg=colour24,fg=colour255" 2>/dev/null
+tmux set-option -t pocket status-left  " #[bold]MAC#[default] " 2>/dev/null
+tmux set-option -t pocket status-left-length 12 2>/dev/null
+tmux set-option -t pocket status-right " #(pmset -g batt | grep -o '[0-9]*%%' | head -1) #[bold]#S " 2>/dev/null
+tmux set-option -t pocket status-interval 30 2>/dev/null
+
+tmux send-keys -t pocket 'clear; pocket-doctor --brief' Enter
+
+exec tmux attach -t pocket
 EOF
 chmod +x "$HOME/.local/bin/pocket"; ok "~/.local/bin/pocket"
+
+# On-device diagnostics. When this breaks the user is holding a phone, possibly
+# far from home — one opaque error is useless there. `doctor` reports each layer
+# separately so the answer is "Tailscale is down", not "connection failed".
+if [ -f "$SCRIPT_DIR/pocket-doctor" ]; then
+  cp "$SCRIPT_DIR/pocket-doctor" "$HOME/.local/bin/pocket-doctor"
+  chmod +x "$HOME/.local/bin/pocket-doctor"
+  ln -sf "$HOME/.local/bin/pocket-doctor" "$HOME/.local/bin/doctor"
+  ok "~/.local/bin/doctor"
+else
+  echo "    ! pocket-doctor not found next to this script; skipping"
+fi
 
 # ---------------------------------------------------------------------- locale
 say "Shell environment"
@@ -168,11 +202,34 @@ say "Power"
 if pmset -g custom 2>/dev/null | sed -n '/AC Power/,$p' | grep -qE '^\s*sleep\s+0'; then
   ok "Mac will not idle-sleep on AC"
 else
-  echo "    ! Mac may sleep on AC — the phone will lose access."
-  echo "      Needs an admin password, so run it yourself:"
+  echo "    ! pmset says the Mac may idle-sleep on AC."
+  echo "      Changing that needs an admin password, so run it yourself:"
   echo "         sudo pmset -c sleep 0 womp 1"
   echo "      Add 'disablesleep 1' too if you run it lid-closed."
 fi
+
+# Belt and braces, and this part needs no admin rights at all. `caffeinate -s`
+# asserts "do not sleep" only while on AC, so it cannot flatten the battery when
+# unplugged. A sleeping Mac is the single most common way this setup dies: the
+# phone just reports a timeout, which looks like a network fault and isn't.
+cat > "$HOME/Library/LaunchAgents/com.pocket.keepawake.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.pocket.keepawake</string>
+    <key>ProgramArguments</key>
+    <array><string>/usr/bin/caffeinate</string><string>-s</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+</dict>
+</plist>
+EOF
+launchctl unload "$HOME/Library/LaunchAgents/com.pocket.keepawake.plist" 2>/dev/null
+launchctl load "$HOME/Library/LaunchAgents/com.pocket.keepawake.plist" 2>/dev/null
+sleep 1
+if pgrep -f "caffeinate -s" >/dev/null 2>&1; then ok "keep-awake agent running (AC only)"
+else echo "    ! keep-awake agent did not start"; fi
 
 # --------------------------------------------------------------------- summary
 say "Next: Tailscale (needs a human)"
