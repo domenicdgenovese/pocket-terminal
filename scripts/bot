@@ -1,0 +1,17 @@
+#!/bin/zsh
+# bot — control the Telegram bridge from the Mac.
+AGENT="$HOME/Library/LaunchAgents/com.pocket.bot.plist"
+case "${1:-status}" in
+  start)  launchctl load "$AGENT" 2>/dev/null && echo "bot started" ;;
+  stop)   launchctl unload "$AGENT" 2>/dev/null && echo "bot stopped — Telegram can no longer run anything" ;;
+  restart) launchctl unload "$AGENT" 2>/dev/null; sleep 1; launchctl load "$AGENT" && echo "bot restarted" ;;
+  log)    tail -30 "$HOME/.pocket/bot.log" 2>/dev/null || echo "no log yet" ;;
+  status)
+    if launchctl list | grep -q com.pocket.bot; then
+      echo "● running   ($(launchctl list | awk '/com.pocket.bot/{print "pid "$1}'))"
+    else
+      echo "○ stopped"
+    fi
+    echo "  bot start | stop | restart | log" ;;
+  *) echo "usage: bot [start|stop|restart|status|log]" ;;
+esac

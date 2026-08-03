@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""pocket-bot — talk to your Mac from Telegram, in plain English.
+
+Send it a sentence and it runs that through Claude Code in the current project.
+Send it /run <cmd> and it runs a shell command. Replies come back as text.
+
+SECURITY, stated plainly because this is the whole risk surface:
+  - This executes code on your Mac from a chat message. That is the point.
+  - It ONLY listens to one chat id (yours). Messages from anywhere else are
+    logged and dropped without executing.
+  - Destructive-looking commands require a typed confirmation first, because
+    on a phone a mis-tap is much likelier than on a keyboard.
+  - /pause stops it acting on anything until /resume. /stop kills it outright.
+  - It never runs as root and never elevates.
+
+Anyone holding your unlocked phone has a shell on your Mac. Put a passcode on
+Telegram (Settings > Privacy and Security > Passcode Lock).
+"""
+
+import json, os, re, shlex, subprocess, sys, threading, time, urllib.parse, urllib.request
+
+HOME = os.path.expanduser("~")
+CONF = os.path.join(HOME, ".pocket", "telegram.env")
+STATE = os.path.join(HOME, ".pocket", "bot-state.json")
+LOG = os.path.join(HOME, ".pocket", "bot.log")
+
+# Things worth a second look before they run unattended from a phone. Not a
+# security boundary — a typo guard. Anything genuinely hostile would be typed
+# deliberately, and the chat allowlist is what defends against that.
+DANGEROUS = re.compile(
+    r"(\brm\s+-[rf]|\bgit\s+push\b.*(--force|-f)\b|\bgit\s+reset\s+--hard"
+    r"|\bdd\b|\bmkfs|\bshutdown\b|\breboot\b|>\s*/dev/|\bchmod\s+-R\b"
+    r"|\bbrew\s+uninstall|\bnpm\s+publish|\bgh\s+repo\s+delete)",
+    re.I,
+)
+
+
+# Long work runs on threads so the poll loop never stalls. Without this the
+# bot goes deaf for the duration of a build — and from the phone, "busy" and
+# "dead" look identical, which is the exact ambiguity this setup exists to kill.
+JOBS = {}
+JOB_LOCK = threading.Lock()
+JOB_SEQ = [0]
+
+
+def start_job(name, fn):
+    with JOB_LOCK:
+        JOB_SEQ[0] += 1
+        jid = JOB_SEQ[0]
+        JOBS[jid] = {"name": name, "started": time.time(), "proc": None}
+
+    def wrap():
+        try:
+            fn(jid)
+        except Exception as e:
+            say(f"❌ job {jid} crashed: {e}")
+        finally:
+            with JOB_LOCK:
+                JOBS.pop(jid, None)
+
+    threading.Thread(target=wrap, daemon=True).start()
+    return jid
+
+
+def human_since(t):
+    d = int(time.time() - t)
+    return f"{d}s" if d < 60 else f"{d // 60}m {d % 60}s"
+
+
+def log(msg):
+    with open(LOG, "a") as f:
+        f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+
+
+def conf():
+    d = {}
+    with open(CONF) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                d[k] = v
+    return d
+
+
+C = conf()
+TOKEN, CHAT = C["TG_TOKEN"], str(C["TG_CHAT"])
+API = f"https://api.telegram.org/bot{TOKEN}"
+
+
+def load_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except Exception:
+        return {"cwd": os.path.join(HOME, "Projects", "leadoff"), "offset": 0,
+                "paused": False, "pending": None}
+
+
+def save_state(s):
+    with open(STATE, "w") as f:
+        json.dump(s, f)
+
+
+def api(method, **params):
+    data = urllib.parse.urlencode(params).encode()
+    try:
+        with urllib.request.urlopen(f"{API}/{method}", data=data, timeout=70) as r:
+            return json.load(r)
+    except Exception as e:
+        log(f"api {method} failed: {e}")
+        return {"ok": False}
+
+
+def say(text, quiet=False):
+    # Telegram caps at 4096. Keep the END — errors live there.
+    if len(text) > 3900:
+        text = "…(trimmed)…\n" + text[-3800:]
+    api("sendMessage", chat_id=CHAT, text=text,
+        disable_web_page_preview="true",
+        disable_notification="true" if quiet else "false")
+
+
+def run_shell(cmd, cwd, timeout=900):
+    try:
+        p = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+                           text=True, timeout=timeout)
+        out = (p.stdout + p.stderr).strip()
+        return p.returncode, out
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout // 60} minutes"
+    except Exception as e:
+        return 1, str(e)
+
+
+def strip_ansi(s):
+    return re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", s)
+
+
+HELP = """Talk to your Mac.
+
+Just type what you want, in normal English:
+  what's failing in the tests?
+  commit this with a sensible message
+  why is the roster page 500ing?
+
+Commands:
+  /run <cmd>    run a shell command directly
+  /where        which project am I in
+  /cd <path>    switch project
+  /projects     list your projects
+  /jobs         what's running right now
+  /status       is the Mac healthy
+  /pause        stop acting on messages
+  /resume       start again
+  /stop         shut the bot down
+  /help         this
+
+Anything not starting with / goes to Claude Code."""
+
+
+def handle(text, st):
+    cwd = st["cwd"]
+    t = text.strip()
+
+    if t in ("/help", "/start", "help"):
+        return HELP
+    if t == "/where":
+        return f"📂 {cwd}\n🌿 {run_shell('git rev-parse --abbrev-ref HEAD', cwd)[1]}"
+    if t == "/projects":
+        base = os.path.join(HOME, "Projects")
+        items = sorted(d for d in os.listdir(base)
+                       if os.path.isdir(os.path.join(base, d))) if os.path.isdir(base) else []
+        return "📁 " + "\n📁 ".join(items) if items else "no ~/Projects yet"
+    if t.startswith("/cd "):
+        p = os.path.expanduser(t[4:].strip())
+        if not os.path.isabs(p):
+            p = os.path.join(HOME, "Projects", p)
+        if os.path.isdir(p):
+            st["cwd"] = p
+            save_state(st)
+            return f"📂 now in {p}"
+        return f"no such directory: {p}"
+    if t == "/status":
+        _, out = run_shell("pocket-doctor 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g'", HOME)
+        return out or "doctor unavailable"
+    if t == "/pause":
+        st["paused"] = True; save_state(st)
+        return "⏸ paused — I'll ignore instructions until /resume"
+    if t == "/resume":
+        st["paused"] = False; save_state(st)
+        return "▶️ resumed"
+    if t == "/stop":
+        say("🛑 shutting down. Restart from the Mac with: pocket-bot &")
+        save_state(st)
+        sys.exit(0)
+
+    if st.get("paused"):
+        return "⏸ paused. /resume to continue."
+
+    # Confirmation flow for anything destructive.
+    pending = st.get("pending")
+    if pending:
+        st["pending"] = None
+        save_state(st)
+        if t.lower() in ("yes", "y", "confirm", "do it"):
+            code, out = run_shell(pending, cwd)
+            return f"{'✅' if code == 0 else '❌'} exit {code}\n\n{strip_ansi(out)[-2500:] or '(no output)'}"
+        return "cancelled."
+
+    if t.startswith("/run "):
+        cmd = t[5:].strip()
+        if DANGEROUS.search(cmd):
+            st["pending"] = cmd
+            save_state(st)
+            return f"⚠️ This looks destructive:\n\n{cmd}\n\nReply YES to run it, anything else cancels."
+        def job(jid):
+            code, out = run_shell(cmd, cwd)
+            body = strip_ansi(out)[-2500:] or "(no output)"
+            say(f"{'✅' if code == 0 else '❌'} job {jid} · {cmd[:40]} · exit {code}\n\n{body}")
+        jid = start_job(cmd[:40], job)
+        return f"⏳ job {jid} started — {cmd[:60]}\nKeep talking, I'll ping when it's done."
+
+    if t in ("/jobs", "/running"):
+        with JOB_LOCK:
+            if not JOBS:
+                return "nothing running"
+            return "\n".join(f"⏳ {j} · {v['name']} · {human_since(v['started'])}"
+                              for j, v in sorted(JOBS.items()))
+
+    if t.startswith("/"):
+        return f"unknown command. /help for the list."
+
+    # Plain English → Claude Code, in the current project.
+    say("🤔 thinking…", quiet=True)
+    prompt = (
+        f"{t}\n\n"
+        "(You are being asked this over Telegram from a phone, so the person "
+        "cannot see your terminal and cannot easily answer follow-up questions. "
+        "Answer in plain text, no markdown tables or code fences. Be brief — "
+        "aim for under 150 words unless they asked for detail. If the request "
+        "is ambiguous, make a sensible choice and say which you made rather "
+        "than asking.)"
+    )
+    # shlex.quote, not json.dumps — the prompt contains quotes and newlines and
+    # goes through a shell. json escaping is not shell escaping.
+    def job(jid):
+        code, out = run_shell(f"claude -p {shlex.quote(prompt)}", cwd, timeout=1800)
+        out2 = strip_ansi(out).strip()
+        say(out2[-3500:] if out2 else f"(claude exited {code} with no output)")
+
+    start_job(t[:40], job)
+    return None  # the "thinking…" ack above is the only immediate reply
+
+
+def main():
+    if not os.path.exists(CONF):
+        print("not set up — run: notify-setup", file=sys.stderr)
+        sys.exit(1)
+    st = load_state()
+    log("bot started")
+    say(f"🤖 Connected. In {os.path.basename(st['cwd'])}.\nSend /help for what I can do.")
+
+    while True:
+        r = api("getUpdates", offset=st["offset"], timeout=60)
+        if not r.get("ok"):
+            time.sleep(5)
+            continue
+        for upd in r.get("result", []):
+            st["offset"] = upd["update_id"] + 1
+            save_state(st)
+            msg = upd.get("message") or upd.get("edited_message")
+            if not msg:
+                continue
+            chat_id = str(msg.get("chat", {}).get("id"))
+            text = msg.get("text", "")
+            if chat_id != CHAT:
+                # Never execute for anyone else. Log it and move on.
+                log(f"DROPPED message from unauthorised chat {chat_id}: {text[:80]!r}")
+                continue
+            if not text:
+                continue
+            log(f"< {text[:200]}")
+            try:
+                reply = handle(text, st)
+            except SystemExit:
+                raise
+            except Exception as e:
+                reply = f"error: {e}"
+                log(f"handler error: {e}")
+            if reply:
+                say(reply)
+                log(f"> {reply[:200]}")
+
+
+if __name__ == "__main__":
+    main()
