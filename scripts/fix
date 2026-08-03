@@ -138,18 +138,42 @@ fi
 if [[ -f "$HOME/.pocket/telegram.env" ]] && command -v notify >/dev/null 2>&1; then
   COMMITS="$(git log --oneline "$START..$BRANCH" 2>/dev/null | wc -l | tr -d ' ')"
   FILES="$(git diff --name-only "$START..$BRANCH" 2>/dev/null | wc -l | tr -d ' ')"
-  if [[ $STATUS -eq 0 ]]; then
-    ICON="✅"; HEAD="fix finished"
+  ESC() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+  SYM="$(print -r -- "$SYMPTOM" | ESC)"
+  WHEN="$(date '+%-I:%M %p')"
+
+  if [[ $STATUS -eq 0 && "$COMMITS" -gt 0 ]]; then
+    # It finished and produced commits — the only case where there's something
+    # to review. Lead with what to do next, not with log output.
+    notify "✅  <b>Fix done</b>
+$(basename "$PWD") · ${WHEN}
+
+<i>${SYM}</i>
+
+${COMMITS} commit(s) · ${FILES} file(s)
+<code>${BRANCH}</code>
+
+To review:
+<code>cd $PWD && git diff $START</code>"
+  elif [[ $STATUS -eq 0 ]]; then
+    # Exited clean but committed nothing. Usually means it couldn't reproduce
+    # the bug and stopped, which is the behaviour we asked for — so say that
+    # plainly rather than reporting a success with nothing behind it.
+    notify "⚠️  <b>Fix made no changes</b>
+$(basename "$PWD") · ${WHEN}
+
+<i>${SYM}</i>
+
+Nothing was committed — most likely it couldn't reproduce the bug.
+<code>$(tail -12 "$LOG" 2>/dev/null | ESC)</code>"
   else
-    ICON="❌"; HEAD="fix exited $STATUS"
+    notify "❌  <b>Fix failed</b> (exit ${STATUS})
+$(basename "$PWD") · ${WHEN}
+
+<i>${SYM}</i>
+
+<code>$(tail -15 "$LOG" 2>/dev/null | ESC)</code>"
   fi
-  notify "${ICON} <b>${HEAD}</b>
-<b>$(basename "$PWD")</b> · <code>${BRANCH}</code>
-${COMMITS} commit(s), ${FILES} file(s) changed
-
-<i>${SYMPTOM}</i>
-
-<code>$(tail -20 "$LOG" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</code>" >/dev/null 2>&1
 fi
 print -r -- "  ${D}review:${N}  git log --oneline $START..$BRANCH   ${D}·${N}  git diff $START"
 print -r -- "  ${D}discard:${N} git checkout $START && git branch -D $BRANCH"

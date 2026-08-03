@@ -1,12 +1,14 @@
 #!/bin/zsh
-# notify — send yourself a Telegram message from the Mac.
+# notify — readable Telegram updates from the Mac.
 #
-#   notify "build finished"
-#   echo "some output" | notify
-#   notify --run npm test         run it, time it, ping with the result
+#   notify "text"                          plain message
+#   notify --run npm test                  run it, ping with the result
+#   notify --run --label "Tests" npm test  ...with a human name
+#   echo "output" | notify                 pipe anything in
 #
-# The point is that you shouldn't have to sit watching a terminal on your phone.
-# Start the work, put the phone away, get told when it's done.
+# Design rule: the message must be readable in a phone notification without
+# opening anything. Success is one glance. Failure carries the error and
+# nothing else — raw terminal spew is not a status update.
 
 set -u
 CONF="$HOME/.pocket/telegram.env"
@@ -14,55 +16,91 @@ CONF="$HOME/.pocket/telegram.env"
 source "$CONF"
 : "${TG_TOKEN:?}" "${TG_CHAT:?}"
 
+# Telegram's HTML parser rejects the whole message on a stray < or &, so an
+# unescaped build log means no notification at all — the worst failure mode,
+# since you'd assume nothing happened.
+esc() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+
+# Build output is full of colour codes, progress spinners and carriage returns.
+# Pasted into Telegram they read as garbage, which is most of why these messages
+# felt unreadable.
+clean() {
+  sed -E $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g' \
+    | tr '\r' '\n' \
+    | sed -E 's/[[:space:]]+$//' \
+    | grep -v '^$'
+}
+
 send() {
-  # Telegram caps messages at 4096 chars. Truncate from the FRONT: when a build
-  # fails, the error is at the end, and a message that cuts off before it is
-  # worse than useless.
   local text="$1"
-  if (( ${#text} > 3900 )); then
-    text="…(earlier output trimmed)…"$'\n'"${text: -3800}"
-  fi
+  (( ${#text} > 3800 )) && text="${text:0:1200}"$'\n\n…trimmed…\n\n'"${text: -2400}"
   curl -s --max-time 15 \
     -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
     --data-urlencode "chat_id=${TG_CHAT}" \
     --data-urlencode "text=${text}" \
-    -d "parse_mode=HTML" \
-    -d "disable_web_page_preview=true" >/dev/null
+    -d "parse_mode=HTML" -d "disable_web_page_preview=true" \
+  | grep -q '"ok":true' || {
+      # Fall back to plain text rather than losing the alert entirely.
+      curl -s --max-time 15 -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+        --data-urlencode "chat_id=${TG_CHAT}" \
+        --data-urlencode "text=$(print -r -- "$text" | sed 's/<[^>]*>//g')" >/dev/null
+    }
+}
+
+human_time() {
+  local d=$1
+  if   (( d < 60 ));   then print -r -- "${d}s"
+  elif (( d < 3600 )); then print -r -- "$((d/60))m $((d%60))s"
+  else print -r -- "$((d/3600))h $(((d%3600)/60))m"; fi
 }
 
 if [[ "${1:-}" == "--run" ]]; then
   shift
-  [[ $# -gt 0 ]] || { print -r -- "notify --run <command…>" >&2; exit 1; }
-  CMD="$*"
-  HOSTLBL="$(basename "$PWD")"
-  START=$SECONDS
-  OUT="$(eval "$CMD" 2>&1)"
-  STATUS=$?
-  DUR=$((SECONDS - START))
-  MIN=$((DUR / 60)); SEC=$((DUR % 60))
-  [[ $MIN -gt 0 ]] && TOOK="${MIN}m ${SEC}s" || TOOK="${SEC}s"
+  LABEL=""
+  if [[ "${1:-}" == "--label" ]]; then LABEL="$2"; shift 2; fi
+  [[ $# -gt 0 ]] || { print -r -- "notify --run [--label NAME] <command…>" >&2; exit 1; }
 
-  print -r -- "$OUT"
+  CMD="$*"
+  # A bare command is a poor headline. Use the first word — "npm", "pytest" —
+  # unless the caller gave something better.
+  [[ -z "$LABEL" ]] && LABEL="${${(z)CMD}[1]:t}"
+  PROJ="$(basename "$PWD")"
+  WHEN="$(date '+%-I:%M %p')"
+
+  START=$SECONDS
+  RAW="$(eval "$CMD" 2>&1)"
+  STATUS=$?
+  TOOK="$(human_time $((SECONDS - START)))"
+
+  print -r -- "$RAW"
+
+  BODY="$(print -r -- "$RAW" | clean)"
+  LINES="$(print -r -- "$BODY" | wc -l | tr -d ' ')"
 
   if [[ $STATUS -eq 0 ]]; then
-    send "✅ <b>done</b> — ${TOOK}
-<b>${HOSTLBL}</b> · <code>${CMD}</code>
-
-<code>$(print -r -- "$OUT" | tail -25)</code>"
+    # Success needs no evidence dump — you asked whether it worked, not what it
+    # printed. One tail line is enough to confirm it did something real.
+    TAIL="$(print -r -- "$BODY" | tail -3 | esc)"
+    send "✅  <b>${LABEL} finished</b>
+${PROJ} · ${TOOK} · ${WHEN}
+<code>${TAIL}</code>"
   else
-    send "❌ <b>failed</b> (exit ${STATUS}) — ${TOOK}
-<b>${HOSTLBL}</b> · <code>${CMD}</code>
+    # Failure is the opposite: you need the error, and it's at the end.
+    TAIL="$(print -r -- "$BODY" | tail -20 | esc)"
+    send "❌  <b>${LABEL} failed</b>
+${PROJ} · ${TOOK} · ${WHEN} · exit ${STATUS}
 
-<code>$(print -r -- "$OUT" | tail -35)</code>"
+<b>Last ${LINES} lines end with:</b>
+<code>${TAIL}</code>"
   fi
   exit $STATUS
 fi
 
 if [[ $# -gt 0 ]]; then
-  send "$*"
+  send "$(print -r -- "$*" | esc)"
 elif [[ ! -t 0 ]]; then
-  send "$(cat)"
+  send "<code>$(cat | clean | tail -30 | esc)</code>"
 else
-  print -r -- "usage: notify \"message\"  |  notify --run <cmd>  |  … | notify" >&2
+  print -r -- "usage: notify \"message\"  |  notify --run [--label NAME] <cmd>  |  … | notify" >&2
   exit 1
 fi
