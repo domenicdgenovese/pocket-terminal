@@ -171,6 +171,30 @@ else
   echo "    ! pocket-doctor not found next to this script; skipping"
 fi
 
+# ------------------------------------------------------------------------ tmux
+say "tmux (touch-friendly)"
+
+# Mouse mode must be OFF for phone use. A swipe registers as scroll-up, which
+# drops tmux into copy mode — and there every keystroke becomes navigation, so
+# the keyboard silently stops working. Users read that as a frozen connection
+# and go hunting through Tailscale and sshd, where nothing is wrong. Losing
+# swipe-scroll costs far less than losing the ability to type.
+if [ -f "$HOME/.tmux.conf" ] && grep -q "set -g mouse" "$HOME/.tmux.conf" 2>/dev/null; then
+  ok "~/.tmux.conf already sets a mouse mode — leaving it alone"
+else
+  cat >> "$HOME/.tmux.conf" <<'TMUXEOF'
+
+# --- pocket terminal ---------------------------------------------------------
+# Off on purpose: on a touchscreen, scrolling traps you in copy mode and the
+# keyboard appears to die. Scrollback is still available via `ctrl-b [` (q exits).
+set -g mouse off
+set -sg escape-time 10
+set -g history-limit 20000
+TMUXEOF
+  ok "wrote tmux settings to ~/.tmux.conf"
+fi
+tmux source-file "$HOME/.tmux.conf" 2>/dev/null || true
+
 # ---------------------------------------------------------------------- locale
 say "Shell environment"
 if ! grep -q "en_US.UTF-8" "$HOME/.zshenv" 2>/dev/null; then
