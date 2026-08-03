@@ -122,9 +122,20 @@ def say(text, quiet=False):
 
 
 def run_shell(cmd, cwd, timeout=900):
+    """Run through the user's real login shell, not /bin/sh.
+
+    Version managers (nvm, pyenv, rbenv) put their shims on PATH from .zshrc,
+    so a bare /bin/sh sees no npm, no node, nothing. Hardcoding those paths
+    would work today and break the next time the node version changes — better
+    to load the same environment an interactive shell would get.
+
+    -l picks up .zprofile; sourcing .zshrc explicitly picks up the rest, since
+    a non-interactive shell skips it by default.
+    """
+    wrapped = f"source $HOME/.zshrc >/dev/null 2>&1; {cmd}"
     try:
-        p = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
-                           text=True, timeout=timeout)
+        p = subprocess.run(["/bin/zsh", "-lc", wrapped], cwd=cwd,
+                           capture_output=True, text=True, timeout=timeout)
         out = (p.stdout + p.stderr).strip()
         return p.returncode, out
     except subprocess.TimeoutExpired:

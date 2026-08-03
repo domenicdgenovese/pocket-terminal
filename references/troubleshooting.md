@@ -293,3 +293,29 @@ sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
 **Related:** running `fix "<symptom + how to reproduce>"` verbatim is a normal
 thing to do — the placeholder reads like a template. `fix` now detects `<…>` and
 says so rather than emitting a git error that explains nothing.
+
+---
+
+## Bot says `command not found` for npm / node / python
+
+**Cause:** the bot ran commands through `/bin/sh`, which gets a minimal PATH
+(`/usr/local/bin:/bin:/usr/bin`) and none of the user's shell configuration.
+Version managers — nvm, pyenv, rbenv, volta — install shims that are only added
+to PATH by `.zshrc`, so under a bare `sh` they may as well not exist.
+
+The tell is `exit 127`, which specifically means "command not found" rather
+than a real build failure. Easy to misread as a broken project.
+
+**Fix:** run through the user's login shell instead of hardcoding paths:
+
+```python
+subprocess.run(["/bin/zsh", "-lc", f"source $HOME/.zshrc >/dev/null 2>&1; {cmd}"], ...)
+```
+
+`-l` loads `.zprofile`; sourcing `.zshrc` explicitly is needed because a
+non-interactive shell skips it. Hardcoding `~/.nvm/versions/node/vX/bin` also
+works, and breaks the next time the node version changes — which is why it's
+worth doing properly.
+
+**Same trap applies to LaunchAgents generally:** anything launchd starts gets a
+minimal environment, not your terminal's.
