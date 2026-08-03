@@ -31,6 +31,7 @@ brief() {
   print -r -- "  ${D}project:${N} $(basename "$PWD")   ${D}power:${N} ${p}${warn}"
   print -r -- ""
   print -r -- "  ${B}claude${N}   start Claude Code      ${B}doctor${N}   check what's broken"
+  print -r -- "  ${B}cheat${N}    every command, explained   ${B}fix${N} \"bug\"  fix it autonomously"
   print -r -- "  ${D}ctrl-b then d = detach. Everything keeps running.${N}"
   print -r -- ""
 }

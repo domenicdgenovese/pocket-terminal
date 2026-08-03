@@ -1,0 +1,92 @@
+#!/bin/zsh
+# cheat — the pocket terminal reference, printed where you actually need it.
+#
+#   cheat          everything
+#   cheat keys     phone keys / getting unstuck
+#   cheat claude   running Claude Code
+#   cheat git      branches and reviewing work
+#   cheat fix      autonomous bug fixing
+
+B=$'\e[1m'; D=$'\e[2m'; C=$'\e[36m'; Y=$'\e[33m'; G=$'\e[32m'; N=$'\e[0m'
+h()  { print -r -- ""; print -r -- "${B}$1${N}"; print -r -- "" }
+c()  { printf "  ${C}%-34s${N} %s\n" "$1" "$2" }
+n()  { print -r -- "  ${D}$1${N}" }
+
+keys() {
+  h "Getting unstuck"
+  c "q  or  Esc"            "keyboard dead? you're in scroll mode — this exits"
+  c "two-finger tap"        "new Blink shell (when everything is frozen)"
+  c "ctrl-b then d"         "detach — work KEEPS RUNNING on the Mac"
+  n "Never use ctrl-c to leave. That kills what's running."
+  h "Where am I?"
+  c "blink>"                "the PHONE. type: mosh mac"
+  c "domgenovese@… %"       "the MAC. you're in. type: claude"
+  n "Bottom bar says MAC when you're on the Mac."
+  h "Blink toolbar (row above keyboard)"
+  c "^"                     "control key — ^ then b for tmux"
+  c "arrows"                "command history"
+}
+
+connect() {
+  h "Connecting"
+  c "mosh mac"              "connect from the phone (only at blink>)"
+  c "doctor"                "check what's broken, in plain English"
+  n "Timed out? Open Tailscale on the phone, toggle it ON."
+  n "Frozen screen? Session died — two-finger tap, then mosh mac."
+}
+
+claude_() {
+  h "Claude Code"
+  c "claude"                "full interactive mode"
+  c "claude -p \"question\""  "ask once, get answer, exit  ← best on a phone"
+  c "claude -c"             "continue the last conversation"
+  n "One-shot (-p) avoids all the modifier-key wrestling. Use it."
+  h "Good phone-sized asks"
+  n "claude -p \"what's left before DropNote ships?\""
+  n "claude -p \"run the tests and tell me what fails\""
+  n "claude -p \"summarise what changed in the last 5 commits\""
+}
+
+fix_() {
+  h "Autonomous bug fixing"
+  c "fix \"<what's broken>\""  "branch, investigate, fix, test, commit"
+  c "fix -n name \"<bug>\""    "same, with a branch name you choose"
+  n "Then ctrl-b d and walk away. It keeps working."
+  h "Make it actually work"
+  n "Say how to reproduce it. An exact error or failing test beats a paragraph —"
+  n "it gives the agent something to verify against instead of guessing."
+  n "It works on a branch and never touches main."
+}
+
+git_() {
+  h "Reviewing what it did"
+  c "git log --oneline -10"  "recent commits"
+  c "git diff main"          "everything changed vs main"
+  c "git status"             "what's uncommitted"
+  c "git checkout main"      "back to safety"
+  c "git branch -D <branch>" "throw the attempt away"
+}
+
+sessions() {
+  h "Sessions"
+  c "tmux ls"               "what's running"
+  c "ctrl-b then d"         "detach (keeps running)"
+  c "ctrl-b then c"         "new window"
+  c "ctrl-b then n"         "next window"
+  c "ctrl-b then ["         "scroll back — q to exit"
+}
+
+case "${1:-all}" in
+  keys)    keys ;;
+  connect) connect ;;
+  claude)  claude_ ;;
+  fix)     fix_ ;;
+  git)     git_ ;;
+  tmux|sessions) sessions ;;
+  *)
+    print -r -- ""
+    print -r -- "${G}  POCKET TERMINAL — cheat sheet${N}   ${D}cheat keys|connect|claude|fix|git|tmux${N}"
+    keys; connect; claude_; fix_; git_; sessions
+    print -r -- ""
+    ;;
+esac

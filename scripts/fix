@@ -1,0 +1,117 @@
+#!/bin/zsh
+# fix — kick off an autonomous bug fix on a branch, safe to walk away from.
+#
+#   fix "tapping Save on the roster screen does nothing on iOS 17"
+#   fix -n login-crash "app crashes opening Settings while signed out"
+#
+# Designed for phone use: one short command, then ctrl-b d and put it away.
+# Everything keeps running on the Mac.
+
+set -u
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'
+
+NAME=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--name) NAME="$2"; shift 2 ;;
+    -h|--help)
+      print -r -- "usage: fix [-n branch-name] \"<what's broken>\""
+      print -r -- ""
+      print -r -- "Include how to reproduce it if you can. A failing test or an exact"
+      print -r -- "error is worth more than a paragraph of description — it gives the"
+      print -r -- "agent something to verify against instead of guessing."
+      exit 0 ;;
+    *) break ;;
+  esac
+done
+
+SYMPTOM="${*:-}"
+if [[ -z "$SYMPTOM" ]]; then
+  print -r -- "${R}Need a description.${N}  e.g.  fix \"Save button does nothing on the roster screen\""
+  exit 1
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  print -r -- "${R}Not in a git repo.${N} cd into the project first — I won't work outside version control."
+  exit 1
+fi
+
+# Branch name: derive from the symptom unless given one.
+if [[ -z "$NAME" ]]; then
+  NAME="$(print -r -- "$SYMPTOM" | tr '[:upper:]' '[:lower:]' \
+          | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//' | cut -c1-32)"
+fi
+BRANCH="fix/${NAME}-$(date +%m%d-%H%M)"
+
+# Never work on the branch the user ships from. Unattended work belongs
+# somewhere they can read the diff before it matters.
+START="$(git rev-parse --abbrev-ref HEAD)"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  print -r -- "${Y}Warning:${N} uncommitted changes on ${START}. They'll come along onto the branch."
+fi
+git checkout -q -b "$BRANCH" || { print -r -- "${R}Couldn't create $BRANCH${N}"; exit 1; }
+
+LOG="$HOME/.pocket/fix-$(date +%m%d-%H%M).log"
+mkdir -p "$HOME/.pocket"
+
+print -r -- ""
+print -r -- "  ${B}branch${N}  $BRANCH   ${D}(from $START)${N}"
+print -r -- "  ${B}log${N}     $LOG"
+print -r -- "  ${D}detach with ctrl-b then d — this keeps running${N}"
+print -r -- ""
+
+# The prompt is the whole product here. Unattended, the failure mode isn't
+# crashing — it's confident wrong work. So: reproduce before fixing, prove the
+# fix with a test, and say so plainly rather than guessing when stuck.
+read -r -d '' PROMPT <<EOF || true
+A bug was reported. Work autonomously and finish on this branch.
+
+Symptom as reported by the user:
+$SYMPTOM
+
+How to work this:
+
+1. Reproduce it first. Find the failing behaviour and confirm you can observe
+   it — a failing test, an exact error, a wrong value. Do not start editing
+   before you can point at the actual defect.
+
+2. If you cannot reproduce it, STOP. Do not guess at a plausible-looking fix.
+   Report what you checked, what you ruled out, and the single most useful
+   thing the user could tell you to narrow it down. A clear "couldn't
+   reproduce, here's what I know" is far more valuable than a speculative
+   change nobody can trust.
+
+3. Once reproduced, find the root cause rather than patching the symptom.
+   Say what the cause was.
+
+4. Add a regression test that fails before your fix and passes after. If the
+   area genuinely can't be tested automatically (device-only behaviour, UI
+   that needs a human), say so explicitly instead of skipping quietly.
+
+5. Run the project's test suite. Report real results — if something fails,
+   show the output. Never describe a suite as passing without running it.
+
+6. Commit to this branch with a message explaining the cause, not just the
+   change. Do not merge, do not push, do not touch $START.
+
+The user is away from the machine and cannot answer questions, so make
+reasonable decisions and write down the assumptions you made. They will read
+the diff before anything ships.
+EOF
+
+print -r -- "${D}running…${N}"
+print -r -- ""
+claude -p "$PROMPT" 2>&1 | tee "$LOG"
+STATUS=${pipestatus[1]}
+
+print -r -- ""
+if [[ $STATUS -eq 0 ]]; then
+  print -r -- "  ${G}finished${N}  branch ${B}$BRANCH${N}"
+else
+  print -r -- "  ${R}exited $STATUS${N}  branch ${B}$BRANCH${N} — log: $LOG"
+fi
+print -r -- "  ${D}review:${N}  git log --oneline $START..$BRANCH   ${D}·${N}  git diff $START"
+print -r -- "  ${D}discard:${N} git checkout $START && git branch -D $BRANCH"
+print -r -- ""
