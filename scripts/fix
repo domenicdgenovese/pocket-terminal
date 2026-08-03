@@ -38,11 +38,30 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
+# Catch the placeholder before it becomes a branch. Pasting the example
+# verbatim is a completely reasonable thing to do, and the resulting git error
+# is opaque — better to say what's actually wrong.
+if [[ "$SYMPTOM" == *"<"*">"* ]]; then
+  print -r -- ""
+  print -r -- "  ${Y}That's the placeholder — swap in the real bug.${N}"
+  print -r -- ""
+  print -r -- "  ${D}What it needs: what's broken, and how to see it happen.${N}"
+  print -r -- "  ${D}e.g.${N} fix \"Save on /roster returns 500, only when a player has no team\""
+  print -r -- ""
+  exit 1
+fi
+
 # Branch name: derive from the symptom unless given one.
+# NOTE: -E is load-bearing. macOS ships BSD sed, where \+ is a literal plus,
+# not "one or more" — so the GNU-style form silently does nothing and characters
+# git rejects (<, >, spaces) sail straight into the branch name.
 if [[ -z "$NAME" ]]; then
   NAME="$(print -r -- "$SYMPTOM" | tr '[:upper:]' '[:lower:]' \
-          | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//' | cut -c1-32)"
+          | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-32 \
+          | sed -E 's/-+$//')"
 fi
+# Last resort: if the description was all punctuation there's nothing to slug.
+[[ -z "$NAME" ]] && NAME="bug"
 BRANCH="fix/${NAME}-$(date +%m%d-%H%M)"
 
 # Never work on the branch the user ships from. Unattended work belongs

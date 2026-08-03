@@ -270,3 +270,26 @@ reachable with `ctrl-b [`, exited with `q`.
 **Don't misread this one.** It presents as "the terminal is frozen" or "it's not
 working", which pulls you toward network and auth — where you will find nothing
 wrong, because nothing is. Check the pane mode before touching anything else.
+
+---
+
+## `fatal: '...' is not a valid branch name` from `fix`
+
+**Cause:** the branch slug wasn't sanitised, so characters git rejects (`<`,
+`>`, spaces) reached `git checkout -b`.
+
+The underlying bug is worth knowing generally, because it bites any script
+written on Linux and run on a Mac: **macOS ships BSD `sed`, where `\+` is a
+literal plus rather than "one or more".** A GNU-style `s/[^a-z0-9]\+/-/g`
+therefore matches nothing and silently passes the input through unchanged — no
+error, no warning, just untouched text arriving somewhere that rejects it.
+
+**Fix:** use `sed -E` and a bare `+`, which behaves the same on both:
+
+```bash
+sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+```
+
+**Related:** running `fix "<symptom + how to reproduce>"` verbatim is a normal
+thing to do — the placeholder reads like a template. `fix` now detects `<…>` and
+says so rather than emitting a git error that explains nothing.
