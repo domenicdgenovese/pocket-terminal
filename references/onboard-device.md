@@ -73,22 +73,45 @@ order:
 
 | Route | Reality |
 |---|---|
-| **iCloud Drive** (Share → Save to Files → iCloud Drive) | **Most reliable.** Read it on the Mac at `~/Library/Mobile Documents/com~apple~CloudDocs/`. Note Blink may name the file something generic like `text 2.txt`. |
+| **iCloud Drive** (Share → Save to Files → iCloud Drive) | Most reliable **when it's available** — read it on the Mac at `~/Library/Mobile Documents/com~apple~CloudDocs/`. Blink names the file something generic like `text 2.txt`. |
+| **AirDrop** | The route to use when iCloud Drive isn't offered. Lands in `~/Downloads`. Requires the Mac's AirDrop set to **Everyone** — on "Contacts Only" the phone reports "No People Found". That's a security setting, so the user changes it, and should change it back after. |
 | Paste into the chat | Fine — a *public* key is not a secret. Good fallback. |
 | Universal Clipboard | Often silently fails. Don't build the flow around it. |
-| AirDrop | Fails when the Mac is set to "Contacts Only" — the phone reports "No People Found". Changing that is a security setting; let the user do it. |
 | Reading it off the screen | Last resort. ECDSA keys are long and truncated in the UI. |
+
+**If "Save to Files" shows no iCloud Drive option**, the device is signed into
+the App Store but not iCloud — a deliberate and sensible choice for a spare
+phone, since it keeps Messages, Photos, and Keychain off a device whose only job
+is running a terminal. Don't treat it as misconfiguration and don't push the user
+to enable iCloud for it. Go to AirDrop instead.
 
 Then install and validate — never append blind:
 
 ```bash
-F="$HOME/Library/Mobile Documents/com~apple~CloudDocs/<file>"
+F="$HOME/Downloads/<file>"                 # or the iCloud Drive path
 ssh-keygen -l -f "$F"                      # confirm it parses as a public key
 cat "$F" >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ssh-keygen -lf ~/.ssh/authorized_keys      # confirm what's now trusted
-rm "$F"                                    # don't leave it lying in iCloud
+rm "$F"                                    # don't leave it lying around
 ```
+
+### Label the key, immediately
+
+Blink comments every key it generates `user@iphone`, regardless of device. With
+two phones onboarded you get two identical-looking entries and no way to tell
+which is which — so revoking one later means guessing, and guessing wrong locks
+out the wrong phone.
+
+Rewrite the comment as you install it:
+
+```bash
+sed -i '' "s|user@iphone$|iphone-11|" ~/.ssh/authorized_keys   # last line only if it's the new one
+awk '{print $NF}' ~/.ssh/authorized_keys                       # verify labels are distinct
+```
+
+Safer for the general case: append with the label already attached, e.g.
+`printf '%s %s %s\n' "$type" "$b64" "iphone-11" >> ~/.ssh/authorized_keys`.
 
 ## 5. Host entry
 

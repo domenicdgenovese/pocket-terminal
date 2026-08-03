@@ -116,16 +116,56 @@ keys entirely, which makes it tempting; it won't work with this install.
 
 ---
 
+## `Socket error: Operation timed out` on the phone
+
+**Cause, nearly always:** the phone is signed into Tailscale but the **VPN is not
+switched on**, so it has no route to the Mac. Signing in is not the same as
+connecting — iOS installs Tailscale as a VPN profile that must be toggled, and
+iOS drops it after the phone has been idle.
+
+This is the highest-value entry in this file. The error says "socket" and
+"timed out", which reads like a firewall or port problem and sends people
+hunting through sshd config — where nothing is wrong.
+
+**Diagnose from the Mac**, which is unambiguous:
+
+```bash
+/Applications/Tailscale.app/Contents/MacOS/Tailscale status
+```
+
+If the phone's line reads `offline, last seen 2h ago`, that's it. No packet ever
+left the phone. Nothing on the Mac is at fault, so don't touch it.
+
+**Fix:** open Tailscale on the phone, toggle it on, confirm it says *Connected*
+and iOS shows the VPN badge. Then enable **VPN On Demand** — without it this
+recurs every time the phone sleeps, and the setup feels flaky when it's fine.
+
+**Distinguish from auth failure.** A timeout means the phone never arrived. If
+you instead see `authFailed(methods: [SSH.AuthAgent])`, the phone *did* reach the
+Mac and the network is fine — that's a key problem, and the Mac's sshd log will
+show the attempt. Timeout = network; authFailed = keys. Don't confuse them.
+
+---
+
 ## Phone can't reach the Mac at all after it was working
 
 Check in this order:
 
-1. **Mac asleep.** The most common cause by far. `pmset -g custom` — want
-   `sleep 0` on AC. Lid-closed additionally needs `disablesleep 1` (requires
-   `sudo`, so the user runs it).
-2. **Tailscale logged out** on either end: `Tailscale status` → "Logged out".
-3. **sshd not running:** `launchctl list | grep com.pocket.sshd`.
-4. **Low Power Mode** on the phone suspending Tailscale.
+1. **Phone's Tailscale VPN toggled off.** See the entry above — most common of
+   all, and it looks like a network fault.
+2. **Mac asleep or dead.** `pmset -g custom` — want `sleep 0` on AC. Lid-closed
+   additionally needs `disablesleep 1` (requires `sudo`, so the user runs it).
+   Also confirm it is genuinely *charging*, not merely "AC attached" — an
+   underpowered adapter drains the machine while looking plugged in:
+
+   ```bash
+   ioreg -rn AppleSmartBattery | grep -oE '"Watts"=[0-9]+|"IsCharging" = [A-Za-z]+'
+   ```
+
+   Under ~30W on a laptop means it will die regardless of what the icon says.
+3. **Tailscale logged out** on either end: `Tailscale status` → "Logged out".
+4. **sshd not running:** `launchctl list | grep com.pocket.sshd`.
+5. **Low Power Mode** on the phone suspending Tailscale.
 
 ---
 
