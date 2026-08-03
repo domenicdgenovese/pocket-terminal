@@ -67,6 +67,74 @@ def human_since(t):
     return f"{d}s" if d < 60 else f"{d // 60}m {d % 60}s"
 
 
+PROJECTS = os.path.join(HOME, "Projects")
+
+
+def project_list():
+    """Projects newest-first by last commit. With 60+ repos, alphabetical is
+    useless on a phone — what you touched yesterday is what you want now."""
+    out = []
+    if not os.path.isdir(PROJECTS):
+        return out
+    for d in os.listdir(PROJECTS):
+        full = os.path.join(PROJECTS, d)
+        if not os.path.isdir(os.path.join(full, ".git")):
+            continue
+        out.append((d, 0, full))
+
+    # One shell invocation for all repos, not one per repo. File mtimes are
+    # useless here — a fresh clone stamps everything with "now", so the sort
+    # would claim 60 projects were all touched today.
+    code, blob = run_shell(
+        'for d in */; do n="${d%/}"; '
+        'printf "%s\\t%s\\n" "$n" '
+        '"$(git -C "$n" log -1 --format=%ct 2>/dev/null || echo 0)"; done',
+        PROJECTS, timeout=90)
+    stamps = {}
+    for line in blob.splitlines():
+        if "\t" in line:
+            n, ts = line.split("\t", 1)
+            stamps[n] = int(ts) if ts.strip().isdigit() else 0
+    out = [(d, stamps.get(d, 0), p) for d, _, p in out]
+    return sorted(out, key=lambda x: -x[1])
+
+
+def project_ready(path):
+    """Has this project had its dependencies installed?"""
+    if os.path.exists(os.path.join(path, "package.json")):
+        return os.path.isdir(os.path.join(path, "node_modules"))
+    if os.path.exists(os.path.join(path, "requirements.txt")):
+        return os.path.isdir(os.path.join(path, ".venv"))
+    return True
+
+
+def find_project(q):
+    """Fuzzy match — exact, then prefix, then substring. Typing full repo names
+    on a phone keyboard is exactly the friction worth removing."""
+    q = q.strip().lower()
+    names = [(d, p) for d, _, p in project_list()]
+    for d, p in names:
+        if d.lower() == q:
+            return [(d, p)]
+    pre = [(d, p) for d, p in names if d.lower().startswith(q)]
+    if pre:
+        return pre
+    return [(d, p) for d, p in names if q in d.lower()]
+
+
+def age(ts):
+    if not ts:
+        return "?"
+    d = int(time.time() - ts)
+    if d < 86400:
+        return "today"
+    if d < 172800:
+        return "1d"
+    if d < 2592000:
+        return f"{d // 86400}d"
+    return f"{d // 2592000}mo"
+
+
 def log(msg):
     with open(LOG, "a") as f:
         f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
@@ -121,20 +189,36 @@ def say(text, quiet=False):
         disable_notification="true" if quiet else "false")
 
 
-def run_shell(cmd, cwd, timeout=900):
-    """Run through the user's real login shell, not /bin/sh.
+def _login_env():
+    """Resolve the user's real shell environment ONCE.
 
-    Version managers (nvm, pyenv, rbenv) put their shims on PATH from .zshrc,
-    so a bare /bin/sh sees no npm, no node, nothing. Hardcoding those paths
-    would work today and break the next time the node version changes — better
-    to load the same environment an interactive shell would get.
-
-    -l picks up .zprofile; sourcing .zshrc explicitly picks up the rest, since
-    a non-interactive shell skips it by default.
+    Version managers (nvm, pyenv, rbenv) add their shims to PATH from .zshrc,
+    so a bare /bin/sh sees no npm or node. The obvious fix — sourcing .zshrc on
+    every command — is correct but ruinously slow: loading nvm takes most of a
+    second, and anything that shells out per-repo across 60 projects then takes
+    minutes. Resolve it once at startup and reuse it.
     """
-    wrapped = f"source $HOME/.zshrc >/dev/null 2>&1; {cmd}"
     try:
-        p = subprocess.run(["/bin/zsh", "-lc", wrapped], cwd=cwd,
+        p = subprocess.run(
+            ["/bin/zsh", "-lc", "source $HOME/.zshrc >/dev/null 2>&1; env"],
+            capture_output=True, text=True, timeout=60)
+        env = dict(os.environ)
+        for line in p.stdout.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                env[k] = v
+        return env
+    except Exception:
+        return dict(os.environ)
+
+
+ENV = _login_env()
+
+
+def run_shell(cmd, cwd, timeout=900):
+    """Run a command with the user's real PATH, without re-sourcing .zshrc."""
+    try:
+        p = subprocess.run(["/bin/zsh", "-c", cmd], cwd=cwd, env=ENV,
                            capture_output=True, text=True, timeout=timeout)
         out = (p.stdout + p.stderr).strip()
         return p.returncode, out
@@ -159,7 +243,8 @@ Commands:
   /run <cmd>    run a shell command directly
   /where        which project am I in
   /cd <path>    switch project
-  /projects     list your projects
+  /projects     your projects, most recent first
+  /setup        install this project's dependencies
   /jobs         what's running right now
   /status       is the Mac healthy
   /pause        stop acting on messages
@@ -178,20 +263,38 @@ def handle(text, st):
         return HELP
     if t == "/where":
         return f"📂 {cwd}\n🌿 {run_shell('git rev-parse --abbrev-ref HEAD', cwd)[1]}"
-    if t == "/projects":
-        base = os.path.join(HOME, "Projects")
-        items = sorted(d for d in os.listdir(base)
-                       if os.path.isdir(os.path.join(base, d))) if os.path.isdir(base) else []
-        return "📁 " + "\n📁 ".join(items) if items else "no ~/Projects yet"
+    if t.startswith("/projects") or t.startswith("/ls"):
+        show_all = t.endswith(" all")
+        rows = project_list()
+        if not rows:
+            return "no projects in ~/Projects"
+        shown = rows if show_all else rows[:18]
+        lines = []
+        for d, ts, path in shown:
+            mark = "" if project_ready(path) else "  ⚙️"
+            here = " ←" if path == cwd else ""
+            lines.append(f"{d}  ·  {age(ts)}{mark}{here}")
+        head = f"{len(rows)} projects" + ("" if show_all else f" · showing {len(shown)} most recent")
+        tail = "" if show_all else "\n\n/projects all  for the full list"
+        return (head + "\n\n" + "\n".join(lines) + tail +
+                "\n\n⚙️ = needs /setup    /cd <name> to switch")
     if t.startswith("/cd "):
-        p = os.path.expanduser(t[4:].strip())
-        if not os.path.isabs(p):
-            p = os.path.join(HOME, "Projects", p)
-        if os.path.isdir(p):
-            st["cwd"] = p
-            save_state(st)
-            return f"📂 now in {p}"
-        return f"no such directory: {p}"
+        q = t[4:].strip()
+        p = os.path.expanduser(q)
+        if os.path.isabs(p) and os.path.isdir(p):
+            st["cwd"] = p; save_state(st)
+            return f"📂 {p}"
+        hits = find_project(q)
+        if not hits:
+            return f"no project matching '{q}'\n\n/projects to see what's there"
+        if len(hits) > 1:
+            names = "\n".join(d for d, _ in hits[:12])
+            return f"{len(hits)} match '{q}':\n\n{names}\n\nBe more specific."
+        d, path = hits[0]
+        st["cwd"] = path; save_state(st)
+        branch = run_shell("git rev-parse --abbrev-ref HEAD", path, timeout=10)[1]
+        warn = "" if project_ready(path) else "\n\n⚙️ dependencies not installed — send /setup"
+        return f"📂 {d}\n🌿 {branch}{warn}"
     if t == "/status":
         _, out = run_shell("pocket-doctor 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g'", HOME)
         return out or "doctor unavailable"
@@ -231,6 +334,23 @@ def handle(text, st):
             say(f"{'✅' if code == 0 else '❌'} job {jid} · {cmd[:40]} · exit {code}\n\n{body}")
         jid = start_job(cmd[:40], job)
         return f"⏳ job {jid} started — {cmd[:60]}\nKeep talking, I'll ping when it's done."
+
+    if t == "/setup":
+        if os.path.exists(os.path.join(cwd, "package.json")):
+            cmd, what = "npm install --no-fund --no-audit", "npm packages"
+        elif os.path.exists(os.path.join(cwd, "requirements.txt")):
+            cmd, what = "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt", "python packages"
+        elif os.path.exists(os.path.join(cwd, "Gemfile")):
+            cmd, what = "bundle install", "gems"
+        else:
+            return "nothing to install here — no package.json, requirements.txt or Gemfile"
+
+        def job(jid):
+            code, out = run_shell(cmd, cwd, timeout=1800)
+            tail = strip_ansi(out)[-1200:]
+            say(f"{'✅' if code == 0 else '❌'} setup {os.path.basename(cwd)} · exit {code}\n\n{tail}")
+        start_job(f"setup {os.path.basename(cwd)}", job)
+        return f"⚙️ installing {what} in {os.path.basename(cwd)} — I'll ping when done."
 
     if t in ("/jobs", "/running"):
         with JOB_LOCK:
