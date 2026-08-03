@@ -1,0 +1,94 @@
+#!/bin/zsh
+# notify-setup — connect a Telegram bot for pocket-terminal notifications.
+#
+# The token is typed directly by you into a 600-perm file. It is never echoed,
+# never logged, and never passes through anyone else. Run this once.
+
+set -u
+CONF="$HOME/.pocket/telegram.env"
+B=$'\e[1m'; D=$'\e[2m'; C=$'\e[36m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; N=$'\e[0m'
+
+mkdir -p "$HOME/.pocket"
+
+print -r -- ""
+print -r -- "${B}Telegram notifications for pocket terminal${N}"
+print -r -- ""
+print -r -- "${D}One-time setup. Two things happen in Telegram, then this does the rest.${N}"
+print -r -- ""
+print -r -- "${B}Step 1 — make the bot${N}"
+print -r -- "  Open Telegram, search for  ${C}@BotFather${N}"
+print -r -- "  Send:  ${C}/newbot${N}"
+print -r -- "  Give it any name, then a username ending in ${C}bot${N}"
+print -r -- "  ${D}e.g. dommy_pocket_bot${N}"
+print -r -- ""
+print -r -- "  BotFather replies with a token like ${D}8123456789:AAH...${N}"
+print -r -- ""
+print -r -- "${B}Step 2 — paste it here${N}"
+print -r -- "  ${D}It won't be shown as you type, and goes straight into${N}"
+print -r -- "  ${D}$CONF (readable only by you).${N}"
+print -r -- ""
+
+printf "  token: "
+read -rs TOKEN
+print -r -- ""
+
+if [[ -z "${TOKEN// }" ]]; then
+  print -r -- "  ${R}nothing entered — stopping${N}"; exit 1
+fi
+
+# Validate before storing, so a typo fails now rather than silently at 2am when
+# a build finishes and no message arrives.
+ME="$(curl -s --max-time 10 "https://api.telegram.org/bot${TOKEN}/getMe")"
+if ! print -r -- "$ME" | grep -q '"ok":true'; then
+  print -r -- "  ${R}Telegram rejected that token.${N} Check you copied all of it."
+  exit 1
+fi
+BOTNAME="$(print -r -- "$ME" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p')"
+print -r -- "  ${G}✓${N} connected to ${B}@${BOTNAME}${N}"
+print -r -- ""
+
+print -r -- "${B}Step 3 — say hello to it${N}"
+print -r -- "  Open ${C}@${BOTNAME}${N} in Telegram and send it any message."
+print -r -- "  ${D}A bot can't message you until you've messaged it first.${N}"
+print -r -- ""
+printf "  ${D}waiting"
+
+CHAT=""
+for i in $(seq 1 60); do
+  UP="$(curl -s --max-time 10 "https://api.telegram.org/bot${TOKEN}/getUpdates")"
+  CHAT="$(print -r -- "$UP" | sed -n 's/.*"chat":{"id":\(-\{0,1\}[0-9]*\).*/\1/p' | head -1)"
+  [[ -n "$CHAT" ]] && break
+  printf "."
+  sleep 2
+done
+print -r -- "${N}"
+
+if [[ -z "$CHAT" ]]; then
+  print -r -- ""
+  print -r -- "  ${Y}Didn't see a message.${N} Send one to @${BOTNAME}, then run ${C}notify-setup${N} again."
+  exit 1
+fi
+
+umask 077
+cat > "$CONF" <<EOF
+# pocket terminal → Telegram. Created by notify-setup.
+# Treat this file as a password: anyone holding the token can post as the bot.
+TG_TOKEN=$TOKEN
+TG_CHAT=$CHAT
+TG_BOT=$BOTNAME
+EOF
+chmod 600 "$CONF"
+
+print -r -- ""
+print -r -- "  ${G}✓${N} saved to ${D}$CONF${N} (600, yours only)"
+print -r -- ""
+
+notify "✅ Pocket terminal connected. You'll get build and fix updates here." >/dev/null 2>&1 \
+  && print -r -- "  ${G}✓${N} test message sent — check Telegram" \
+  || print -r -- "  ${Y}!${N} saved, but the test message failed. Try: notify \"hello\""
+print -r -- ""
+print -r -- "  ${D}From now on:${N}"
+print -r -- "    ${C}notify \"text\"${N}                 send yourself a message"
+print -r -- "    ${C}notify --run npm test${N}         run it, ping when done"
+print -r -- "    ${C}fix \"bug\"${N}                     pings automatically when finished"
+print -r -- ""

@@ -174,7 +174,7 @@ fi
 # `cheat` and `fix`. Typing is expensive on a phone and half-remembered syntax
 # is worse than none, so the reference lives in the terminal rather than in a
 # document the user would have to go find on another device.
-for helper in cheat fix; do
+for helper in cheat fix notify notify-setup; do
   if [ -f "$SCRIPT_DIR/$helper" ]; then
     cp "$SCRIPT_DIR/$helper" "$HOME/.local/bin/$helper"
     chmod +x "$HOME/.local/bin/$helper"

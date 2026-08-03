@@ -127,6 +127,17 @@ s10() {
   n "Projects/DropNote     Projects/SLATE     Projects/ContentEngine"
 }
 
+s12() {
+  h "12 · TELEGRAM ALERTS"
+  c "notify-setup"           "one-time: connect a Telegram bot"
+  c "notify \"text\""          "message yourself"
+  c "notify --run npm test"  "run it, ping when done, with output"
+  n "fix \"bug\" pings automatically when it finishes."
+  print -r -- ""
+  w "The point: start it, put the phone away, get told when it's done."
+  n "Failure messages keep the END of the output — that's where errors are."
+}
+
 s11() {
   h "11 · TRAPS"
   w "ctrl-c to \"leave\""
@@ -155,13 +166,14 @@ menu() {
   printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "3" "which machine am I"  "9"  "sessions & keys"
   printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "4" "the four commands"   "10" "getting around"
   printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "5" "claude code"         "11" "traps"
-  printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "6" "ready-made asks"     "all" "everything"
+  printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "6" "ready-made asks"     "12" "telegram alerts"
+  printf "  ${C}%-3s${N} %-24s ${C}%-3s${N} %s\n" "" ""                    "all" "everything"
   print -r -- ""
   print -r -- "  ${D}panic? →  cheat 1${N}"
   print -r -- ""
 }
 
-everything() { for i in 1 2 3 4 5 6 7 8 9 10 11; do s$i; done; print -r -- "" }
+everything() { for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s$i; done; print -r -- "" }
 
 # Search strips colour so matches are found in the text, not the escape codes.
 search() {
@@ -195,6 +207,7 @@ case "${1:-menu}" in
   9|tmux|sessions|keys)    s9 ;;
   10|move|cd|nav)          s10 ;;
   11|traps|never|dont)     s11 ;;
+  12|telegram|notify|alerts) s12 ;;
   all|everything)          everything ;;
   *)                       search "$1" ;;
 esac

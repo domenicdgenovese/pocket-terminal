@@ -1,0 +1,68 @@
+#!/bin/zsh
+# notify — send yourself a Telegram message from the Mac.
+#
+#   notify "build finished"
+#   echo "some output" | notify
+#   notify --run npm test         run it, time it, ping with the result
+#
+# The point is that you shouldn't have to sit watching a terminal on your phone.
+# Start the work, put the phone away, get told when it's done.
+
+set -u
+CONF="$HOME/.pocket/telegram.env"
+[[ -f "$CONF" ]] || { print -r -- "notify: not set up yet — run: notify-setup" >&2; exit 1; }
+source "$CONF"
+: "${TG_TOKEN:?}" "${TG_CHAT:?}"
+
+send() {
+  # Telegram caps messages at 4096 chars. Truncate from the FRONT: when a build
+  # fails, the error is at the end, and a message that cuts off before it is
+  # worse than useless.
+  local text="$1"
+  if (( ${#text} > 3900 )); then
+    text="…(earlier output trimmed)…"$'\n'"${text: -3800}"
+  fi
+  curl -s --max-time 15 \
+    -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+    --data-urlencode "chat_id=${TG_CHAT}" \
+    --data-urlencode "text=${text}" \
+    -d "parse_mode=HTML" \
+    -d "disable_web_page_preview=true" >/dev/null
+}
+
+if [[ "${1:-}" == "--run" ]]; then
+  shift
+  [[ $# -gt 0 ]] || { print -r -- "notify --run <command…>" >&2; exit 1; }
+  CMD="$*"
+  HOSTLBL="$(basename "$PWD")"
+  START=$SECONDS
+  OUT="$(eval "$CMD" 2>&1)"
+  STATUS=$?
+  DUR=$((SECONDS - START))
+  MIN=$((DUR / 60)); SEC=$((DUR % 60))
+  [[ $MIN -gt 0 ]] && TOOK="${MIN}m ${SEC}s" || TOOK="${SEC}s"
+
+  print -r -- "$OUT"
+
+  if [[ $STATUS -eq 0 ]]; then
+    send "✅ <b>done</b> — ${TOOK}
+<b>${HOSTLBL}</b> · <code>${CMD}</code>
+
+<code>$(print -r -- "$OUT" | tail -25)</code>"
+  else
+    send "❌ <b>failed</b> (exit ${STATUS}) — ${TOOK}
+<b>${HOSTLBL}</b> · <code>${CMD}</code>
+
+<code>$(print -r -- "$OUT" | tail -35)</code>"
+  fi
+  exit $STATUS
+fi
+
+if [[ $# -gt 0 ]]; then
+  send "$*"
+elif [[ ! -t 0 ]]; then
+  send "$(cat)"
+else
+  print -r -- "usage: notify \"message\"  |  notify --run <cmd>  |  … | notify" >&2
+  exit 1
+fi

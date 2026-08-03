@@ -112,6 +112,26 @@ if [[ $STATUS -eq 0 ]]; then
 else
   print -r -- "  ${R}exited $STATUS${N}  branch ${B}$BRANCH${N} — log: $LOG"
 fi
+
+# Ping Telegram if it's configured. The whole point of running this unattended
+# is not having to keep checking — so the message carries enough to decide
+# whether it's worth opening the laptop, not just "done".
+if [[ -f "$HOME/.pocket/telegram.env" ]] && command -v notify >/dev/null 2>&1; then
+  COMMITS="$(git log --oneline "$START..$BRANCH" 2>/dev/null | wc -l | tr -d ' ')"
+  FILES="$(git diff --name-only "$START..$BRANCH" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ $STATUS -eq 0 ]]; then
+    ICON="✅"; HEAD="fix finished"
+  else
+    ICON="❌"; HEAD="fix exited $STATUS"
+  fi
+  notify "${ICON} <b>${HEAD}</b>
+<b>$(basename "$PWD")</b> · <code>${BRANCH}</code>
+${COMMITS} commit(s), ${FILES} file(s) changed
+
+<i>${SYMPTOM}</i>
+
+<code>$(tail -20 "$LOG" 2>/dev/null | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')</code>" >/dev/null 2>&1
+fi
 print -r -- "  ${D}review:${N}  git log --oneline $START..$BRANCH   ${D}·${N}  git diff $START"
 print -r -- "  ${D}discard:${N} git checkout $START && git branch -D $BRANCH"
 print -r -- ""
