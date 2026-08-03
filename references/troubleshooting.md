@@ -231,3 +231,42 @@ The rejected `nobody` login is the point — it proves writes are landing.
 
 **Fix:** add `-e` to `ProgramArguments` before `-D`, then reload the agent.
 `setup-mac.sh` does this; installs created before this fix need it added by hand.
+
+---
+
+## Keyboard does nothing / "I can't type in the terminal"
+
+**Cause:** tmux is in **copy mode**. A swipe on a touchscreen is a scroll event,
+and scroll-up puts tmux into copy mode, where every keystroke is navigation
+rather than input. Nothing is broken and nothing is frozen — the session is fine
+and the shell is waiting.
+
+**Tell:** a small yellow `[n/m]` in the top-right of the pane. Confirm from the
+Mac, which is unambiguous:
+
+```bash
+tmux list-panes -a -F "#{pane_id} #{?pane_in_mode,COPY-MODE,normal}"
+```
+
+**Immediate fix:** press `q` or Escape. You can also do it *for* the user from
+the Mac, which is far kinder than talking someone through modifier keys on a
+phone:
+
+```bash
+tmux send-keys -t pocket -X cancel
+```
+
+**Permanent fix — do this during setup, not after:** turn mouse mode off.
+
+```
+# ~/.tmux.conf
+set -g mouse off
+```
+
+Losing swipe-to-scroll is a trivial cost next to the keyboard silently dying,
+and on a phone this *will* happen repeatedly otherwise. Scrollback is still
+reachable with `ctrl-b [`, exited with `q`.
+
+**Don't misread this one.** It presents as "the terminal is frozen" or "it's not
+working", which pulls you toward network and auth — where you will find nothing
+wrong, because nothing is. Check the pane mode before touching anything else.
