@@ -103,6 +103,7 @@ cat > "$AGENT" <<EOF
     <key>ProgramArguments</key>
     <array>
         <string>/usr/sbin/sshd</string>
+        <string>-e</string>
         <string>-D</string>
         <string>-f</string>
         <string>$SSHD_DIR/sshd_config</string>

@@ -202,3 +202,32 @@ at the bottom of the phone screen is the user-visible confirmation.
 
 **Escape hatch:** if auto-attach ever traps someone, connect with
 `POCKET_NOTMUX=1` for a plain shell.
+
+---
+
+## sshd log is stale / no entries for a connection that clearly happened
+
+**Cause:** `sshd -D` alone logs to **syslog**, not stderr, so launchd's
+`StandardOutPath` captures nothing. The file keeps whatever it had from an
+earlier run and silently stops growing. The daemon still holds the file open, so
+`lsof` looks correct and everything appears fine.
+
+**Why it matters more than it sounds:** the log is the tool you use to split
+"the phone never arrived" (network) from "the phone arrived and was rejected"
+(keys). When it goes blind you lose that split, and — worse — an empty log reads
+as *proof of absence*. It isn't. Don't conclude a device never connected from a
+log you haven't verified is live.
+
+**Check** it's actually recording before trusting it:
+
+```bash
+B=$(wc -c < ~/.pocket/sshd/sshd.log)
+ssh -p 2222 -o BatchMode=yes -o ConnectTimeout=3 nobody@127.0.0.1 true 2>/dev/null
+sleep 2; A=$(wc -c < ~/.pocket/sshd/sshd.log)
+[ "$A" -gt "$B" ] && echo "logging live" || echo "BLIND"
+```
+
+The rejected `nobody` login is the point — it proves writes are landing.
+
+**Fix:** add `-e` to `ProgramArguments` before `-D`, then reload the agent.
+`setup-mac.sh` does this; installs created before this fix need it added by hand.
