@@ -69,34 +69,68 @@ def human_since(t):
 
 PROJECTS = os.path.join(HOME, "Projects")
 
+# Work does not all live in one folder. DommyOS keeps its own Projects/ dir,
+# and a project you cannot reach from the phone may as well not exist — so scan
+# every root rather than assuming a single home.
+PROJECT_ROOTS = [
+    PROJECTS,
+    os.path.join(HOME, "Documents", "DommyOS", "Projects"),
+]
+
 
 def project_list():
     """Projects newest-first by last commit. With 60+ repos, alphabetical is
     useless on a phone — what you touched yesterday is what you want now."""
     out = []
-    if not os.path.isdir(PROJECTS):
-        return out
-    for d in os.listdir(PROJECTS):
-        full = os.path.join(PROJECTS, d)
-        if not os.path.isdir(os.path.join(full, ".git")):
+    seen = set()
+    for i, root in enumerate(PROJECT_ROOTS):
+        if not os.path.isdir(root):
             continue
-        out.append((d, 0, full))
+        for d in sorted(os.listdir(root)):
+            full = os.path.join(root, d)
+            if not os.path.isdir(full) or d.startswith("."):
+                continue
+            # ~/Projects is one-repo-per-folder, so requiring .git keeps it
+            # clean. Curated roots like DommyOS/Projects hold sub-projects of a
+            # single repo — DropNote and SLATE have no .git of their own, and
+            # excluding them would hide the projects most worth reaching.
+            if i == 0 and not os.path.isdir(os.path.join(full, ".git")):
+                continue
+            if d in seen:      # same name in two roots — first root wins
+                continue
+            seen.add(d)
+            out.append((d, 0, full))
 
-    # One shell invocation for all repos, not one per repo. File mtimes are
-    # useless here — a fresh clone stamps everything with "now", so the sort
-    # would claim 60 projects were all touched today.
-    code, blob = run_shell(
-        'for d in */; do n="${d%/}"; '
-        'printf "%s\\t%s\\n" "$n" '
-        '"$(git -C "$n" log -1 --format=%ct 2>/dev/null || echo 0)"; done',
-        PROJECTS, timeout=90)
+    # One shell invocation per root, not one per repo. File mtimes are useless
+    # here — a fresh clone stamps everything with "now", so the sort would
+    # claim 60 projects were all touched today.
     stamps = {}
-    for line in blob.splitlines():
-        if "\t" in line:
-            n, ts = line.split("\t", 1)
-            stamps[n] = int(ts) if ts.strip().isdigit() else 0
-    out = [(d, stamps.get(d, 0), p) for d, _, p in out]
-    return sorted(out, key=lambda x: -x[1])
+    for root in PROJECT_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        code, blob = run_shell(
+            'for d in */; do n="${d%/}"; '
+            'printf "%s\\t%s\\n" "$n" '
+            '"$(git -C "$n" log -1 --format=%ct 2>/dev/null || echo 0)"; done',
+            root, timeout=90)
+        for line in blob.splitlines():
+            if "\t" in line:
+                n, ts = line.split("\t", 1)
+                if n not in stamps:
+                    stamps[n] = int(ts) if ts.strip().isdigit() else 0
+    # Sub-projects have no history of their own; ask the containing repo when
+    # its path last changed, so DropNote doesn't sort to the bottom as unknown.
+    resolved = []
+    for d, _, path in out:
+        ts = stamps.get(d, 0)
+        if not ts and not os.path.isdir(os.path.join(path, ".git")):
+            code, o = run_shell(
+                f'git log -1 --format=%ct -- {shlex.quote(os.path.basename(path))} 2>/dev/null',
+                os.path.dirname(path), timeout=20)
+            if o.strip().isdigit():
+                ts = int(o.strip())
+        resolved.append((d, ts, path))
+    return sorted(resolved, key=lambda x: -x[1])
 
 
 def project_ready(path):
